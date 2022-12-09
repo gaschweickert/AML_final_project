@@ -20,6 +20,26 @@ import numpy as np
 import cv2
 import os
 
+import collect_data
+
+import tensorflow as tf
+print(tf.version.VERSION)
+
+# Configuring settings for multi-gpu strategy
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    number_of_gpus = len(gpus)
+    try:
+        # Currently, memory growth needs to be the same across GPUs
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+        mirrored_strategy = tf.distribute.MirroredStrategy()
+    except RuntimeError as e:
+    # Memory growth must be set before GPUs have been initialized
+        print(e)
+
 def split_data(df: pd.DataFrame, split_size: float) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Accepts a Pandas DataFrame and splits it into training, testing and validation data. Returns DataFrames.
 
@@ -92,14 +112,14 @@ def create_generators(train: pd.DataFrame, val: pd.DataFrame) -> Tuple[Iterator,
     """
     train_generator = ImageDataGenerator(
         rescale=1.0 / 255,
-        rotation_range=5,
-        width_shift_range=0.1,
-        height_shift_range=0.1,
-        brightness_range=(0.75, 1),
-        shear_range=0.1,
-        zoom_range=[0.75, 1],
-        horizontal_flip=True,
-        vertical_flip=True,
+        #rotation_range=5,
+        #width_shift_range=0.1,
+        #height_shift_range=0.1,
+        #brightness_range=(0.75, 1),
+        #shear_range=0.1,
+        #zoom_range=[0.75, 1],
+        #horizontal_flip=True,
+        #vertical_flip=True,
         #validation_split=0.2,
     )  # create an ImageDataGenerator with multiple image augmentations
     validation_generator = ImageDataGenerator(
@@ -194,14 +214,14 @@ def run_model(
     model.summary()
 
     model.compile(
-        optimizer=optimizers.Adam(learning_rate=0.001), loss='mean_squared_error', metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()]
+        optimizer=optimizers.Adam(learning_rate=0.001), loss="mean_absolute_error", metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()]
     )
     history = model.fit(
         train_generator,
         epochs=100,
         validation_data=validation_generator,
         callbacks=callbacks,
-        #workers=6, # adjust this according to the number of CPU cores of your machine
+        workers=6, # adjust this according to the number of CPU cores of your machine
     )
 
     # model.evaluate(
@@ -211,38 +231,12 @@ def run_model(
 
     return history  # type: ignore
 
-def collect_data(filename):
 
-    __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
-    print(os.path.join(__location__, filename))
-    data_df = pd.DataFrame({"image_loc": [],"image_id": [], "bug_type": [], "count":[]})
-    for number, line in enumerate(open(os.path.join(__location__, filename))):
-        if number == 0:
-            continue
-        try:
-            im_loc = os.path.join(__location__, "bug_images/"+line.strip().split(",")[0])
-            data_df.loc[len(data_df.index)] = [im_loc, line.strip().split(",")[0], line.strip().split(",")[1], line.strip().split(",")[2]]
-        except Exception as e:
-            continue
-    
-
-    data_abw  = data_df[(data_df["bug_type"]=='abw')]
-    data_abw = pd.concat([data_abw, data_df[~data_df["image_id"].isin(data_abw["image_id"])]])
-    data_abw.loc[data_abw["bug_type"]=='pbw', "count"] = 0
-    data_abw.drop('bug_type', inplace = True, axis = 1)
-
-    data_pbw  = data_df[(data_df["bug_type"]=='pbw')]
-    data_pbw = pd.concat([data_pbw, data_df[~data_df["image_id"].isin(data_pbw["image_id"])]])
-    data_pbw.loc[data_pbw["bug_type"]=='abw', "count"] = 0
-    data_pbw.drop('bug_type', inplace = True, axis = 1) 
-
-    grouped_data_df = pd.DataFrame({"image_loc": [],"image_id": [], "counts":[]})
-    for id in data_df.image_id.unique():
-        abw_count = data_abw[(data_abw.image_id == id)]["count"].to_numpy()
-        pbw_count = data_pbw[(data_pbw.image_id == id)]["count"].to_numpy()
-        grouped_data_df.loc[len(grouped_data_df.index)] = [os.path.join(__location__, "bug_images/"+id), id, np.asarray([abw_count[0], pbw_count[0]]).astype('float64')]
-    return grouped_data_df, data_df, data_abw, data_pbw
-
+def visualize_image(df, idx=1):
+    im = cv2.imread(df["image_loc"].iloc[idx])
+    cv2.imshow(df["image_loc"].iloc[1], im)
+    cv2.waitKey(0) # waits until a key is pressed
+    cv2.destroyAllWindows()
 
 
 
@@ -254,13 +248,20 @@ def run(small_sample=False):
     small_sample : bool, optional
         If you just want to check if the code is working, set small_sample to True, by default False
     """
+    # directory = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
+    grouped_train_df, train_df, data_abw, data_pbw = (
+        pd.read_csv('./dataframes/grouped_data_df.csv'), 
+        pd.read_csv('./dataframes/train_df.csv'), 
+        pd.read_csv('./dataframes/data_abw.csv'), 
+        pd.read_csv('./dataframes/data_pbw.csv') 
+    )  
 
-    grouped_train_df, train_df, data_abw, data_pbw = collect_data(filename='Train.csv')
-    if small_sample == True:
+    if small_sample:
         data_abw = data_abw.iloc[0:1000]  # set small_sampe to True if you want to check if your code works without long waiting
     
     train, val = split_data(data_abw, 0.2)  # split your data
-  
+
+    visualize_image(train, 4)
 
     train_generator, validation_generator = create_generators(train=train, val=val)
     
@@ -276,7 +277,7 @@ def run(small_sample=False):
 
 
 if __name__ == "__main__":
-    run(small_sample=True)
+    run(small_sample=False)
 
 
 
